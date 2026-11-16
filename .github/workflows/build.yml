@@ -25,9 +25,12 @@ jobs:
           foreach ($arch in @('win-x64', 'win-x86')) {
             $app = Start-Process "dist/$arch/xl2txt.exe" -PassThru
             try {
-              $ready = $app.WaitForInputIdle(30000)
-              $app.Refresh()
-              if (!$ready -or $app.HasExited -or $app.MainWindowHandle -eq 0) { throw "$arch application did not open a window" }
+              $deadline = [DateTime]::UtcNow.AddSeconds(30)
+              do {
+                Start-Sleep -Milliseconds 250
+                $app.Refresh()
+              } while (!$app.HasExited -and $app.MainWindowHandle -eq 0 -and [DateTime]::UtcNow -lt $deadline)
+              if ($app.HasExited -or $app.MainWindowHandle -eq 0) { throw "$arch application did not open a window (exit: $($app.ExitCode))" }
               Write-Host "$arch desktop window opened successfully"
               $app.CloseMainWindow() | Out-Null
               if (!$app.WaitForExit(10000)) { throw "$arch application did not close" }

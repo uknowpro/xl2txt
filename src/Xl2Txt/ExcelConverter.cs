@@ -5,7 +5,7 @@ namespace Xl2Txt;
 
 public static class ExcelConverter
 {
-    public static string Convert(string source, string destination, Action<string> report, CancellationToken cancellation)
+    public static string Convert(string source, string destination, Action<string> report, CancellationToken cancellation, bool directRead)
     {
         if (!File.Exists(source)) throw new FileNotFoundException("엑셀 파일을 찾을 수 없습니다.", source);
         Directory.CreateDirectory(destination);
@@ -30,6 +30,17 @@ public static class ExcelConverter
             cancellation.ThrowIfCancellationRequested();
             book = books.Open(Filename: Path.GetFullPath(source), UpdateLinks: 0,
                 ReadOnly: true, IgnoreReadOnlyRecommended: true, AddToMru: false);
+            if (directRead)
+            {
+                dynamic? permission = null;
+                try
+                {
+                    permission = book.Permission;
+                    if ((bool)permission.Enabled)
+                        throw new InvalidOperationException("사용 권한이 제한된 문서에는 직접 셀 읽기를 사용하지 않습니다. 허용된 경우 Excel 내보내기 방식을 사용하세요.");
+                }
+                finally { Release(permission); }
+            }
             sheets = book.Worksheets;
             string separator = System.Convert.ToString(excel.International[5]) ?? ",";
             if (separator.Length != 1) throw new NotSupportedException("한 글자 목록 구분자만 지원합니다.");
@@ -46,6 +57,13 @@ public static class ExcelConverter
                     if ((int)sheet.Visible != -1) continue;
                     string name = sheet.Name;
                     report($"[{i}/{count}] {name} 변환 중…");
+                    string txt = Path.Combine(staging, $"{i:D3}_{CsvText.SafeName(name)}.txt");
+                    if (directRead)
+                    {
+                        WriteCells(sheet, txt, name, report, cancellation);
+                        exported++;
+                        continue;
+                    }
                     // Use Excel's own Copy/SaveAs export paths so policy failures propagate.
                     sheet.Copy();
                     copy = excel.ActiveWorkbook;
@@ -53,7 +71,6 @@ public static class ExcelConverter
                     copy.SaveAs(Filename: csv, FileFormat: 62, Local: true); // xlCSVUTF8 (Excel 2016+)
                     copy.Close(SaveChanges: false);
                     Release(copy); copy = null;
-                    string txt = Path.Combine(staging, $"{i:D3}_{CsvText.SafeName(name)}.txt");
                     using (var reader = new StreamReader(csv, new UTF8Encoding(false, true), true))
                     using (var writer = new StreamWriter(txt, false, new UTF8Encoding(true)))
                         CsvText.Normalize(reader, writer, separator[0]);
@@ -83,6 +100,52 @@ public static class ExcelConverter
                 try { Directory.Delete(staging, true); }
                 catch (Exception e) { report($"임시 결과 정리 실패: {staging} ({e.Message})"); }
             }
+        }
+    }
+
+    private static void WriteCells(dynamic sheet, string path, string name, Action<string> report,
+        CancellationToken cancellation)
+    {
+        dynamic? cells = null, lastRowCell = null, lastColumnCell = null;
+        try
+        {
+            cells = sheet.Cells;
+            // Search actual formulas/values instead of a UsedRange inflated by formatting.
+            // Specify all persisted Find settings; never change the user's workbook.
+            lastRowCell = cells.Find(What: "*", LookIn: -4123, LookAt: 2, SearchOrder: 1,
+                SearchDirection: 2, MatchCase: false, MatchByte: false, SearchFormat: false);
+            using var writer = new StreamWriter(path, false, new UTF8Encoding(true));
+            if (lastRowCell == null) return;
+            lastColumnCell = cells.Find(What: "*", LookIn: -4123, LookAt: 2, SearchOrder: 2,
+                SearchDirection: 2, MatchCase: false, MatchByte: false, SearchFormat: false);
+            int rows = lastRowCell.Row;
+            int columns = lastColumnCell.Column;
+            for (int row = 1; row <= rows; row++)
+            {
+                cancellation.ThrowIfCancellationRequested();
+                for (int column = 1; column <= columns; column++)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    dynamic? cell = null;
+                    try
+                    {
+                        cell = cells[row, column];
+                        string value = System.Convert.ToString(cell.Text) ?? "";
+                        if (column > 1) writer.Write(',');
+                        writer.Write(CsvText.Escape(value));
+                    }
+                    finally { Release(cell); }
+                }
+                writer.Write("\r\n");
+                if (row == 1 || row % 50 == 0 || row == rows)
+                    report($"{name}: {row:N0}/{rows:N0}행 읽음");
+            }
+        }
+        finally
+        {
+            Release(lastColumnCell);
+            Release(lastRowCell);
+            Release(cells);
         }
     }
 
