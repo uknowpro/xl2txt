@@ -1,0 +1,52 @@
+name: Windows build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Test CSV conversion
+        run: dotnet run --project tests/Tests.csproj -c Release
+      - name: Publish Windows x64
+        run: dotnet publish src/Xl2Txt/Xl2Txt.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o dist/win-x64
+      - name: Publish Windows x86
+        run: dotnet publish src/Xl2Txt/Xl2Txt.csproj -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -p:DebugSymbols=false -o dist/win-x86
+      - name: Smoke test both desktop executables
+        shell: pwsh
+        run: |
+          foreach ($arch in @('win-x64', 'win-x86')) {
+            $app = Start-Process "dist/$arch/xl2txt.exe" -PassThru
+            try {
+              $ready = $app.WaitForInputIdle(30000)
+              $app.Refresh()
+              if (!$ready -or $app.HasExited -or $app.MainWindowHandle -eq 0) { throw "$arch application did not open a window" }
+              Write-Host "$arch desktop window opened successfully"
+              $app.CloseMainWindow() | Out-Null
+              if (!$app.WaitForExit(10000)) { throw "$arch application did not close" }
+              if ($app.ExitCode -ne 0) { throw "$arch application exited with $($app.ExitCode)" }
+            } finally {
+              if (!$app.HasExited) { $app.Kill() }
+              $app.Dispose()
+            }
+          }
+      - name: Package
+        shell: pwsh
+        run: |
+          Copy-Item dist/win-x64/xl2txt.exe dist/xl2txt-win-x64.exe
+          Copy-Item dist/win-x86/xl2txt.exe dist/xl2txt-win-x86.exe
+          Get-FileHash dist/xl2txt-win-*.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } | Set-Content dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xl2txt-windows
+          path: |
+            dist/xl2txt-win-*.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
