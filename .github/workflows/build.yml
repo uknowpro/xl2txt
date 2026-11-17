@@ -23,6 +23,7 @@ jobs:
         shell: pwsh
         run: |
           foreach ($arch in @('win-x64', 'win-x86')) {
+            $startup = [System.Diagnostics.Stopwatch]::StartNew()
             $app = Start-Process "dist/$arch/xl2txt.exe" -PassThru
             try {
               $deadline = [DateTime]::UtcNow.AddSeconds(30)
@@ -31,7 +32,8 @@ jobs:
                 $app.Refresh()
               } while (!$app.HasExited -and $app.MainWindowHandle -eq 0 -and [DateTime]::UtcNow -lt $deadline)
               if ($app.HasExited -or $app.MainWindowHandle -eq 0) { throw "$arch application did not open a window (exit: $($app.ExitCode))" }
-              Write-Host "$arch desktop window opened successfully"
+              $startup.Stop()
+              Write-Host "$arch desktop window opened in $($startup.ElapsedMilliseconds) ms"
               $app.CloseMainWindow() | Out-Null
               if (!$app.WaitForExit(10000)) { throw "$arch application did not close" }
               if ($app.ExitCode -ne 0) { throw "$arch application exited with $($app.ExitCode)" }
@@ -45,6 +47,7 @@ jobs:
         run: |
           Copy-Item dist/win-x64/xl2txt.exe dist/xl2txt-win-x64.exe
           Copy-Item dist/win-x86/xl2txt.exe dist/xl2txt-win-x86.exe
+          Get-ChildItem dist/xl2txt-win-*.exe | ForEach-Object { Write-Host "$($_.Name): $($_.Length) bytes" }
           Get-FileHash dist/xl2txt-win-*.exe -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $([System.IO.Path]::GetFileName($_.Path))" } | Set-Content dist/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:

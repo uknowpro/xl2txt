@@ -5,8 +5,9 @@ namespace Xl2Txt;
 
 public static class ExcelConverter
 {
-    public static string Convert(string source, string destination, Action<string> report, CancellationToken cancellation, bool directRead)
+    public static string Convert(string source, string destination, Action<string> report, CancellationToken cancellation, bool directRead, char outputDelimiter = ',')
     {
+        CsvText.ValidateDelimiter(outputDelimiter);
         if (!File.Exists(source)) throw new FileNotFoundException("엑셀 파일을 찾을 수 없습니다.", source);
         Directory.CreateDirectory(destination);
         string id = Guid.NewGuid().ToString("N")[..8];
@@ -60,7 +61,7 @@ public static class ExcelConverter
                     string txt = Path.Combine(staging, $"{i:D3}_{CsvText.SafeName(name)}.txt");
                     if (directRead)
                     {
-                        WriteCells(sheet, txt, name, report, cancellation);
+                        WriteCells(sheet, txt, name, report, cancellation, outputDelimiter);
                         exported++;
                         continue;
                     }
@@ -73,7 +74,7 @@ public static class ExcelConverter
                     Release(copy); copy = null;
                     using (var reader = new StreamReader(csv, new UTF8Encoding(false, true), true))
                     using (var writer = new StreamWriter(txt, false, new UTF8Encoding(true)))
-                        CsvText.Normalize(reader, writer, separator[0]);
+                        CsvText.Normalize(reader, writer, separator[0], outputDelimiter);
                     File.Delete(csv);
                     exported++;
                 }
@@ -104,7 +105,7 @@ public static class ExcelConverter
     }
 
     private static void WriteCells(dynamic sheet, string path, string name, Action<string> report,
-        CancellationToken cancellation)
+        CancellationToken cancellation, char outputDelimiter)
     {
         dynamic? cells = null, lastRowCell = null, lastColumnCell = null;
         try
@@ -131,8 +132,7 @@ public static class ExcelConverter
                     {
                         cell = cells[row, column];
                         string value = System.Convert.ToString(cell.Text) ?? "";
-                        if (column > 1) writer.Write(',');
-                        writer.Write(CsvText.Escape(value));
+                        CsvText.WriteField(writer, value, column == 1, outputDelimiter);
                     }
                     finally { Release(cell); }
                 }

@@ -6,8 +6,9 @@ public static class CsvText
 {
     // Excel's CSV delimiter follows the user's regional list separator.
     // Parse records rather than replacing characters (quoted delimiters/newlines are data).
-    public static void Normalize(TextReader input, TextWriter output, char delimiter)
+    public static void Normalize(TextReader input, TextWriter output, char delimiter, char outputDelimiter = ',')
     {
+        ValidateDelimiter(outputDelimiter);
         var field = new StringBuilder();
         var fields = new List<string>();
         bool quoted = false, closed = false, started = false;
@@ -15,7 +16,8 @@ public static class CsvText
         void EndRow()
         {
             EndField();
-            output.Write(string.Join(",", fields.Select(Escape)));
+            for (int i = 0; i < fields.Count; i++)
+                WriteField(output, fields[i], i == 0, outputDelimiter);
             output.Write("\r\n");
             fields.Clear(); started = false;
         }
@@ -49,8 +51,21 @@ public static class CsvText
         if (started) EndRow();
     }
 
-    public static string Escape(string value) => value.IndexOfAny([',', '"', '\r', '\n']) >= 0
+    public static string Escape(string value, char delimiter = ',') => value.IndexOfAny([delimiter, '"', '\r', '\n']) >= 0
         ? "\"" + value.Replace("\"", "\"\"") + "\"" : value;
+
+    public static void WriteField(TextWriter output, string value, bool first, char delimiter)
+    {
+        ValidateDelimiter(delimiter);
+        if (!first) output.Write(delimiter);
+        output.Write(Escape(value, delimiter));
+    }
+
+    public static void ValidateDelimiter(char delimiter)
+    {
+        if (delimiter is not (',' or '\t' or ' '))
+            throw new ArgumentException("구분자는 쉼표, 탭, 공백 중 하나여야 합니다.", nameof(delimiter));
+    }
 
     public static string SafeName(string value)
     {
